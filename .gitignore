@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+
+# GIMP
+# No specific GIMP ignores known for project directory, add if discovered.
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Editor/IDE specific
+.vscode/
+.idea/
+*.swp
+*~
+._*
