@@ -43,43 +43,30 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
 
         # Height (as per user's code)
         label = Gtk.Label.new_with_mnemonic("_Height:")
-        settings_grid.attach(label, 0, 1, 1, 1)
+        settings_grid.attach(label, 2, 0, 1, 1)
         w_height = GimpUi.prop_spin_button_new(config, "height", 0.05, 1.0, 2)
         label.set_mnemonic_widget(w_height)
-        settings_grid.attach(w_height, 1, 1, 1, 1)
+        settings_grid.attach(w_height, 3, 0, 1, 1)
 
         # Unit (as per user's code)
         label = Gtk.Label.new_with_mnemonic("_Unit:")
-        settings_grid.attach(label, 0, 2, 1, 1)
+        settings_grid.attach(label, 4, 0, 1, 1)
         w_unit = GimpUi.prop_unit_combo_box_new(config, "unit")
         label.set_mnemonic_widget(w_unit)
-        settings_grid.attach(w_unit, 1, 2, 1, 1)
+        settings_grid.attach(w_unit, 5, 0, 1, 1)
 
-        # Middle preview and scrollbars
-        preview_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        preview_box.set_border_width(6)
-        main_vbox.pack_start(preview_box, True, True, 0)
+        # Middle preview and scrollbars using a Gtk.Grid
+        # Grid layout:
+        # [  ][x_offset][  ]
+        # [y_offset][preview][x_scale]
+        # [  ][y_scale][lock ]
+        preview_grid = Gtk.Grid()
+        preview_grid.set_column_spacing(6)
+        preview_grid.set_row_spacing(6)
+        preview_grid.set_border_width(6)
+        main_vbox.pack_start(preview_grid, True, True, 0)
 
-        # Y-Offset Scrollbar
-        adj_y_offset = Gtk.Adjustment(
-            value=config.get_property("y_offset"),
-            lower=-0.5,
-            upper=0.5,
-            step_increment=0.001,
-            page_increment=0.01,
-        )
-        w_y_offset = Gtk.Scrollbar(
-            orientation=Gtk.Orientation.VERTICAL, adjustment=adj_y_offset
-        )
-        config.bind_property(
-            "y_offset", adj_y_offset, "value", GObject.BindingFlags.DEFAULT
-        )
-        preview_box.pack_start(w_y_offset, False, False, 0)
-
-        center_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        preview_box.pack_start(center_vbox, True, True, 0)
-
-        # X-Offset Scrollbar
+        # X-Offset Scrollbar (Top, Horizontal)
         adj_x_offset = Gtk.Adjustment(
             value=config.get_property("x_offset"),
             lower=-0.5,
@@ -93,32 +80,39 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
         config.bind_property(
             "x_offset", adj_x_offset, "value", GObject.BindingFlags.DEFAULT
         )
-        center_vbox.pack_start(w_x_offset, False, False, 0)
+        preview_grid.attach(w_x_offset, 1, 0, 1, 1)  # Column 1, Row 0
+        w_x_offset.set_hexpand(True)
+        w_x_offset.set_vexpand(False)
 
+        # Y-Offset Scrollbar (Left, Vertical)
+        adj_y_offset = Gtk.Adjustment(
+            value=config.get_property("y_offset"),
+            lower=-0.5,
+            upper=0.5,
+            step_increment=0.001,
+            page_increment=0.01,
+        )
+        w_y_offset = Gtk.Scrollbar(
+            orientation=Gtk.Orientation.VERTICAL, adjustment=adj_y_offset
+        )
+        config.bind_property(
+            "y_offset", adj_y_offset, "value", GObject.BindingFlags.DEFAULT
+        )
+        preview_grid.attach(w_y_offset, 0, 1, 1, 1)  # Column 0, Row 1
+        w_y_offset.set_hexpand(False)
+        w_y_offset.set_vexpand(True)
+
+        # Preview Area (Center)
         preview_area = Gtk.DrawingArea()
-        preview_area.set_size_request(800, 800)
+        preview_area.set_size_request(600, 400)
         preview_frame = Gtk.Frame()
         preview_frame.set_shadow_type(Gtk.ShadowType.IN)  # Add a 1px border
         preview_frame.add(preview_area)
-        center_vbox.pack_start(preview_frame, True, True, 0)
+        preview_grid.attach(preview_frame, 1, 1, 1, 1)  # Column 1, Row 1
+        preview_frame.set_hexpand(True)
+        preview_frame.set_vexpand(True)
 
-        # Y-Scale Scrollbar
-        adj_y_scale = Gtk.Adjustment(
-            value=config.get_property("y_scale"),
-            lower=100.0,
-            upper=200.0,
-            step_increment=0.5,
-            page_increment=5.0,
-        )
-        w_y_scale = Gtk.Scrollbar(
-            orientation=Gtk.Orientation.HORIZONTAL, adjustment=adj_y_scale
-        )
-        config.bind_property(
-            "y_scale", adj_y_scale, "value", GObject.BindingFlags.DEFAULT
-        )
-        center_vbox.pack_start(w_y_scale, False, False, 0)
-
-        # X-Scale Scrollbar
+        # X-Scale Scrollbar (Right, Vertical)
         adj_x_scale = Gtk.Adjustment(
             value=config.get_property("x_scale"),
             lower=100.0,
@@ -132,22 +126,45 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
         config.bind_property(
             "x_scale", adj_x_scale, "value", GObject.BindingFlags.DEFAULT
         )
-        preview_box.pack_start(w_x_scale, False, False, 0)
+        preview_grid.attach(w_x_scale, 2, 1, 1, 1)  # Column 2, Row 1
+        w_x_scale.set_hexpand(False)
+        w_x_scale.set_vexpand(True)
 
-        # Bottom info and lock
-        bottom_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        bottom_hbox.set_border_width(6)
-        main_vbox.pack_start(bottom_hbox, False, False, 0)
+        # Y-Scale Scrollbar (Bottom, Horizontal)
+        adj_y_scale = Gtk.Adjustment(
+            value=config.get_property("y_scale"),
+            lower=100.0,
+            upper=200.0,
+            step_increment=0.5,
+            page_increment=5.0,
+        )
+        w_y_scale = Gtk.Scrollbar(
+            orientation=Gtk.Orientation.HORIZONTAL, adjustment=adj_y_scale
+        )
+        config.bind_property(
+            "y_scale", adj_y_scale, "value", GObject.BindingFlags.DEFAULT
+        )
+        preview_grid.attach(w_y_scale, 1, 2, 1, 1)  # Column 1, Row 2
+        w_y_scale.set_hexpand(True)
+        w_y_scale.set_vexpand(False)
 
-        info_label = Gtk.Label(label="DPI: ... Crop: ...")
-        bottom_hbox.pack_start(info_label, True, True, 0)
-
-        # Lock Checkbox
-        w_lock_scale = Gtk.CheckButton.new_with_label("Lock")
+        # Lock Checkbox (Bottom Right)
+        # Using GimpUi.ChainButton as requested by the user
+        w_lock_scale = GimpUi.ChainButton.new(GimpUi.ChainPosition.BOTTOM)
+        w_lock_scale.set_active(True)  # Default to locked
         config.bind_property(
             "lock_scale", w_lock_scale, "active", GObject.BindingFlags.DEFAULT
         )
-        bottom_hbox.pack_start(w_lock_scale, False, False, 0)
+        preview_grid.attach(w_lock_scale, 2, 2, 1, 1)  # Column 2, Row 2
+        w_lock_scale.set_hexpand(False)
+        w_lock_scale.set_vexpand(False)
+
+        # Bottom Info Label
+        bottom_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        bottom_hbox.set_border_width(6)
+        main_vbox.pack_start(bottom_hbox, False, True, 0)
+        info_label = Gtk.Label(label="DPI: ... Crop: ...")
+        bottom_hbox.pack_start(info_label, True, True, 0)  # Changed expand to True
 
         # --- Draw Handler ---
         def draw_preview(widget, cr):
@@ -205,8 +222,8 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
                 )
                 return
 
-            target_width_in = target_width * conversion_factor
-            target_height_in = target_height * conversion_factor
+            target_width_in = target_width / conversion_factor
+            target_height_in = target_height / conversion_factor
 
             if target_width_in == 0 or target_height_in == 0:
                 info_label.set_text("Dimension in inches is zero.")
@@ -215,7 +232,9 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
             dpi_x = img_width_px / target_width_in
             dpi_y = img_height_px / target_height_in
 
-            info_label.set_text(f"X-DPI: {dpi_x:.0f}, Y-DPI: {dpi_y:.0f}")
+            info_label.set_text(
+                f"X-DPI: {dpi_x:.0f}, Y-DPI: {dpi_y:.0f} - Target in inches: {target_width_in} x {target_height_in}"
+            )
 
             # Trigger a redraw of the preview area
             preview_area.queue_draw()
@@ -231,6 +250,31 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
             "y_scale",
         ]:
             config.connect(f"notify::{prop}", update_calculations)
+
+        # Logic for linking scale sliders
+        def on_scale_changed(adjustment, other_adjustment, lock_button):
+            if lock_button.get_active():
+                new_value = adjustment.get_value()
+
+                prop_name_to_update = None
+                if other_adjustment == adj_x_scale:
+                    prop_name_to_update = "x_scale"
+                elif other_adjustment == adj_y_scale:
+                    prop_name_to_update = "y_scale"
+
+                if (
+                    prop_name_to_update
+                    and config.get_property(prop_name_to_update) != new_value
+                ):
+                    config.set_property(prop_name_to_update, new_value)
+
+        # Connect scale adjustments to the linking logic
+        adj_x_scale.connect(
+            "value-changed", on_scale_changed, adj_y_scale, w_lock_scale
+        )
+        adj_y_scale.connect(
+            "value-changed", on_scale_changed, adj_x_scale, w_lock_scale
+        )
 
         # Initial call
         update_calculations()
@@ -273,7 +317,7 @@ class PerfectFitPrint(Gimp.PlugIn):
                 Gimp.ProcedureSensitivityMask.DRAWABLE
                 | Gimp.ProcedureSensitivityMask.NO_DRAWABLES
             )
-            procedure.set_menu_label("Perfect_Fit Print...")
+            procedure.set_menu_label("PerfectFit Print_...")
             procedure.set_attribution("Dustin Hollon", "Dustin Hollon", "2025")
             procedure.add_menu_path("<Image>/File")
             procedure.set_documentation(
