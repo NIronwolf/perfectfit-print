@@ -196,7 +196,7 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
                 else:
                     target_height = preview_height
                     target_width = int(target_height * img_aspect)
-                
+
                 # Ensure target dimensions are at least 1px
                 target_width = max(1, target_width)
                 target_height = max(1, target_height)
@@ -213,14 +213,16 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
                     else:  # Portrait or Square
                         base_h = 1024
                         base_w = int(1024 * img_aspect)
-                    
-                    base_thumbnail = image.get_thumbnail(max(1, base_w), max(1, base_h), True)
-                    
+
+                    base_thumbnail = image.get_thumbnail(
+                        max(1, base_w), max(1, base_h), True
+                    )
+
                     # And scale it up to the final target size
                     if base_thumbnail:
-                        thumbnail = base_thumbnail.scale_simple(target_width, 
-                                                                target_height, 
-                                                                GdkPixbuf.InterpType.BILINEAR)
+                        thumbnail = base_thumbnail.scale_simple(
+                            target_width, target_height, GdkPixbuf.InterpType.BILINEAR
+                        )
 
             if thumbnail:
                 # Center the final thumbnail in the preview area
@@ -228,6 +230,71 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
                 dest_y = (preview_height - thumbnail.get_height()) // 2
                 Gdk.cairo_set_source_pixbuf(cr, thumbnail, dest_x, dest_y)
                 cr.paint()
+
+                # --- Draw Crop Rectangle Overlay ---
+                target_w_prop = config.get_property("width")
+                target_h_prop = config.get_property("height")
+
+                if target_h_prop > 0:
+                    target_aspect = target_w_prop / target_h_prop
+
+                    thumb_w = thumbnail.get_width()
+                    thumb_h = thumbnail.get_height()
+                    thumb_aspect = thumb_w / thumb_h
+
+                    # Calculate crop rect dimensions, fitting inside the thumbnail
+                    if target_aspect > thumb_aspect:
+                        crop_w = thumb_w
+                        crop_h = int(crop_w / target_aspect)
+                    else:
+                        crop_h = thumb_h
+                        crop_w = int(crop_h * target_aspect)
+
+                    # Position the crop rect based on offset sliders
+                    x_offset_val = adj_x_offset.get_value()
+                    y_offset_val = adj_y_offset.get_value()
+
+                    x_slop = thumb_w - crop_w
+                    y_slop = thumb_h - crop_h
+
+                    crop_x = dest_x + (x_offset_val + 0.5) * x_slop
+                    crop_y = dest_y + (y_offset_val + 0.5) * y_slop
+
+                    # --- Dimming Overlay ---
+                    cr.set_source_rgba(0, 0, 0, 0.5) # 50% translucent black
+
+                    # Area above the crop
+                    cr.rectangle(dest_x, dest_y, thumb_w, crop_y - dest_y)
+
+                    # Area below the crop
+                    cr.rectangle(dest_x, crop_y + crop_h, thumb_w, (dest_y + thumb_h) - (crop_y + crop_h))
+
+                    # Area left of the crop (within the crop's vertical bounds)
+                    cr.rectangle(dest_x, crop_y, crop_x - dest_x, crop_h)
+
+                    # Area right of the crop (within the crop's vertical bounds)
+                    cr.rectangle(crop_x + crop_w, crop_y, (dest_x + thumb_w) - (crop_x + crop_w), crop_h)
+                    
+                    cr.fill()
+                    # --- END Dimming Overlay ---
+
+                    # Draw marching ants rectangle
+                    cr.set_line_width(1.0)
+                    # Inset by 0.5 for a crisp 1px line
+                    cr.rectangle(crop_x + 0.5, crop_y + 0.5, crop_w - 1, crop_h - 1)
+
+                    # Black dashes
+                    cr.set_source_rgb(0, 0, 0)
+                    cr.stroke_preserve()
+
+                    # White dashes (offset)
+                    cr.set_dash([4, 4], 4)
+                    cr.set_source_rgb(1, 1, 1)
+                    cr.stroke()
+
+                    # Reset dash for other drawing
+                    cr.set_dash([])
+
             elif image is not None:
                 # Fallback if thumbnail creation fails for any reason
                 cr.set_source_rgb(0.5, 0.5, 0.5)
@@ -279,8 +346,11 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
             dpi_x = img_width_px / target_width_in
             dpi_y = img_height_px / target_height_in
 
+            x_offset = adj_x_offset.get_value()
+            y_offset = adj_y_offset.get_value()
+
             info_label.set_text(
-                f"X-DPI: {dpi_x:.0f}, Y-DPI: {dpi_y:.0f} - Target in inches: {target_width_in} x {target_height_in}"
+                f"X-DPI: {dpi_x:.0f}, Y-DPI: {dpi_y:.0f} | Target: {target_width_in:.2f}x{target_height_in:.2f}in | Offset: {x_offset:.2f}, {y_offset:.2f}"
             )
 
             # Trigger a redraw of the preview area
@@ -291,8 +361,6 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
             "width",
             "height",
             "unit",
-            "x_offset",
-            "y_offset",
             "x_scale",
             "y_scale",
         ]:
@@ -323,8 +391,10 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
             "value-changed", on_scale_changed, adj_x_scale, w_lock_scale
         )
 
-        # Initial call
-        update_calculations()
+        # Explicitly connect the offset sliders' adjustments to the update function.
+        # The Gimp.Config "notify" signal seems unreliable for standard Gtk widgets.
+        adj_x_offset.connect("value-changed", update_calculations)
+        adj_y_offset.connect("value-changed", update_calculations)
 
         if not dialog.run():
             dialog.destroy()
