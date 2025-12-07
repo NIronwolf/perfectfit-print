@@ -11,6 +11,8 @@ from gi.repository import GimpUi
 from gi.repository import GObject
 from gi.repository import GLib
 from gi.repository import Gtk
+from gi.repository import Gdk  # Import Gdk
+
 import sys
 
 plug_in_proc = "plug-in-perfectfit-print"
@@ -168,27 +170,29 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
 
         # --- Draw Handler ---
         def draw_preview(widget, cr):
-            # Get allocation
             alloc = widget.get_allocation()
             width = alloc.width
             height = alloc.height
 
-            # Dark grey background
             cr.set_source_rgb(0.2, 0.2, 0.2)
             cr.rectangle(0, 0, width, height)
             cr.fill()
 
-            # Placeholder for crop rectangle (white)
-            cr.set_source_rgb(1.0, 1.0, 1.0)
-            cr.set_line_width(1.0)
-
-            # Example: draw a rectangle that is 80% of the size of the preview area
-            rect_w = width * 0.8
-            rect_h = height * 0.8
-            rect_x = (width - rect_w) / 2
-            rect_y = (height - rect_h) / 2
-            cr.rectangle(rect_x, rect_y, rect_w, rect_h)
-            cr.stroke()
+            if image is not None:
+                # Provide width, height, alpha
+                thumbnail = image.get_thumbnail(width, height, True)
+                if thumbnail:
+                    # For now, just draw at 0,0 - no scaling yet.
+                    Gdk.cairo_set_source_pixbuf(cr, thumbnail, 0, 0)
+                    cr.paint()
+                else:
+                    # Fallback if get_thumbnail returns None
+                    cr.set_source_rgb(0.5, 0.5, 0.5)
+                    cr.move_to(0, 0)
+                    cr.line_to(width, height)
+                    cr.move_to(width, 0)
+                    cr.line_to(0, height)
+                    cr.stroke()
 
             return False
 
