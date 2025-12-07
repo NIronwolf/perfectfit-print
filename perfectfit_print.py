@@ -11,7 +11,7 @@ from gi.repository import GimpUi
 from gi.repository import GObject
 from gi.repository import GLib
 from gi.repository import Gtk
-from gi.repository import Gdk  # Import Gdk
+from gi.repository import Gdk, GdkPixbuf  # Import Gdk
 
 import sys
 
@@ -171,28 +171,71 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
         # --- Draw Handler ---
         def draw_preview(widget, cr):
             alloc = widget.get_allocation()
-            width = alloc.width
-            height = alloc.height
+            preview_width = alloc.width
+            preview_height = alloc.height
 
+            # Fill background
             cr.set_source_rgb(0.2, 0.2, 0.2)
-            cr.rectangle(0, 0, width, height)
+            cr.rectangle(0, 0, preview_width, preview_height)
             cr.fill()
 
+            thumbnail = None
             if image is not None:
-                # Provide width, height, alpha
-                thumbnail = image.get_thumbnail(width, height, True)
-                if thumbnail:
-                    # For now, just draw at 0,0 - no scaling yet.
-                    Gdk.cairo_set_source_pixbuf(cr, thumbnail, 0, 0)
-                    cr.paint()
+                img_width = image.get_width()
+                img_height = image.get_height()
+                if img_width == 0 or img_height == 0:
+                    return False  # Nothing to draw for an empty image
+
+                img_aspect = img_width / img_height
+                preview_aspect = preview_width / preview_height
+
+                # Calculate the final dimensions of the pixbuf to be displayed
+                if img_aspect > preview_aspect:
+                    target_width = preview_width
+                    target_height = int(target_width / img_aspect)
                 else:
-                    # Fallback if get_thumbnail returns None
-                    cr.set_source_rgb(0.5, 0.5, 0.5)
-                    cr.move_to(0, 0)
-                    cr.line_to(width, height)
-                    cr.move_to(width, 0)
-                    cr.line_to(0, height)
-                    cr.stroke()
+                    target_height = preview_height
+                    target_width = int(target_height * img_aspect)
+                
+                # Ensure target dimensions are at least 1px
+                target_width = max(1, target_width)
+                target_height = max(1, target_height)
+
+                # --- Thumbnail Logic with Scaling Workaround ---
+                if target_width <= 1024 and target_height <= 1024:
+                    # If the target is small enough, get it directly
+                    thumbnail = image.get_thumbnail(target_width, target_height, True)
+                else:
+                    # Otherwise, get a max 1024px thumbnail first
+                    if img_aspect > 1:  # Landscape
+                        base_w = 1024
+                        base_h = int(1024 / img_aspect)
+                    else:  # Portrait or Square
+                        base_h = 1024
+                        base_w = int(1024 * img_aspect)
+                    
+                    base_thumbnail = image.get_thumbnail(max(1, base_w), max(1, base_h), True)
+                    
+                    # And scale it up to the final target size
+                    if base_thumbnail:
+                        thumbnail = base_thumbnail.scale_simple(target_width, 
+                                                                target_height, 
+                                                                GdkPixbuf.InterpType.BILINEAR)
+
+            if thumbnail:
+                # Center the final thumbnail in the preview area
+                dest_x = (preview_width - thumbnail.get_width()) // 2
+                dest_y = (preview_height - thumbnail.get_height()) // 2
+                Gdk.cairo_set_source_pixbuf(cr, thumbnail, dest_x, dest_y)
+                cr.paint()
+            elif image is not None:
+                # Fallback if thumbnail creation fails for any reason
+                cr.set_source_rgb(0.5, 0.5, 0.5)
+                cr.move_to(0, 0)
+                cr.line_to(preview_width, preview_height)
+                cr.move_to(preview_width, 0)
+                cr.line_to(0, preview_height)
+                cr.stroke()
 
             return False
 
