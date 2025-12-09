@@ -45,50 +45,42 @@ def _get_base_thumbnail(image):
     return image.get_thumbnail(target_width, target_height, True)
 
 
-def _get_zoomed_view(base_thumbnail, x_scale, y_scale, x_offset, y_offset):
+def _get_zoomed_view(base_thumbnail, x_scale, y_scale):
     """
-    Takes a base thumbnail and slider values, and returns a new pixbuf
-    containing the panned-and-zoomed view.
+    Takes a base thumbnail and scale values, and returns a zoomed pixbuf.
+    
+    Returns a larger pixbuf containing the entire zoomed image.
+    Panning/offset will be handled during display.
     """
-    if not base_thumbnail or (x_scale == 1.0 and y_scale == 1.0):
+    if not base_thumbnail:
         return base_thumbnail
 
     thumb_w = base_thumbnail.get_width()
     thumb_h = base_thumbnail.get_height()
+    
+    # Calculate zoomed dimensions
+    zoomed_w = int(thumb_w * x_scale)
+    zoomed_h = int(thumb_h * y_scale)
 
     zoomed_pixbuf = GdkPixbuf.Pixbuf.new(
         GdkPixbuf.Colorspace.RGB,
         base_thumbnail.get_has_alpha(),
         base_thumbnail.get_bits_per_sample(),
-        thumb_w,
-        thumb_h,
+        zoomed_w,
+        zoomed_h,
     )
     if base_thumbnail.get_has_alpha():
         zoomed_pixbuf.fill(0x00000000)
 
-    # Corrected LOGIC based on negative offsets
-    # 1. Calculate the centering offset to keep the zoom centered
-    center_offset_x = -((thumb_w * x_scale - thumb_w) / 2)
-    center_offset_y = -((thumb_h * y_scale - thumb_h) / 2)
-
-    # 2. Calculate the panning offset from the slider
-    pan_range_x = thumb_w * x_scale - thumb_w
-    pan_range_y = thumb_h * y_scale - thumb_h
-    pan_offset_x = -x_offset * pan_range_x
-    pan_offset_y = -y_offset * pan_range_y
-
-    # 3. Final offset is the sum
-    final_offset_x = center_offset_x + pan_offset_x
-    final_offset_y = center_offset_y + pan_offset_y
-
+    # Just zoom, no panning
     base_thumbnail.scale(
         dest=zoomed_pixbuf,
         dest_x=0,
         dest_y=0,
-        dest_width=thumb_w,
-        dest_height=thumb_h,
-        offset_x=final_offset_x,
-        offset_y=final_offset_y,
+        dest_width=zoomed_w,
+        dest_height=zoomed_h,
+        offset_x=0,
+        offset_y=0,
         scale_x=x_scale,
         scale_y=y_scale,
         interp_type=GdkPixbuf.InterpType.BILINEAR,
@@ -98,21 +90,18 @@ def _get_zoomed_view(base_thumbnail, x_scale, y_scale, x_offset, y_offset):
 
 
 def _draw_overlays(
-    cr, thumb_w, thumb_h, dest_x, dest_y, x_offset, y_offset, target_w_prop, target_h_prop
+    cr, thumb_w, thumb_h, dest_x, dest_y, x_offset, y_offset, crop_w, crop_h
 ):
     """
     Draws the dimming overlay and the dashed crop rectangle.
+    
+    Args:
+        cr: Cairo context
+        thumb_w, thumb_h: Displayed thumbnail dimensions
+        dest_x, dest_y: Position where thumbnail is drawn
+        x_offset, y_offset: Crop position offsets
+        crop_w, crop_h: Crop rectangle dimensions
     """
-
-    target_aspect = target_w_prop / target_h_prop
-    thumb_aspect = thumb_w / thumb_h
-
-    if target_aspect > thumb_aspect:
-        crop_w = thumb_w
-        crop_h = int(crop_w / target_aspect)
-    else:
-        crop_h = thumb_h
-        crop_w = int(crop_h * target_aspect)
 
     x_slop = thumb_w - crop_w
     y_slop = thumb_h - crop_h
@@ -309,67 +298,70 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
                 x_offset = adj_x_offset.get_value()
                 y_offset = adj_y_offset.get_value()
 
-                final_thumbnail = _get_zoomed_view(
-                    base_thumbnail, x_scale, y_scale, x_offset, y_offset
-                )
+                # Get the zoomed thumbnail
+                zoomed_thumbnail = _get_zoomed_view(base_thumbnail, x_scale, y_scale)
 
-                thumb_w = final_thumbnail.get_width()
-                thumb_h = final_thumbnail.get_height()
-                thumb_aspect = thumb_w / thumb_h
-                preview_aspect = preview_width / preview_height
+                base_w = base_thumbnail.get_width()
+                base_h = base_thumbnail.get_height()
+                thumb_w = zoomed_thumbnail.get_width()
+                thumb_h = zoomed_thumbnail.get_height()
 
-                if thumb_aspect > preview_aspect:
-                    display_h = preview_height
-                    display_w = int(display_h * thumb_aspect)
-                else:
-                    display_w = preview_width
-                    display_h = int(display_w / thumb_aspect)
-
-                display_w = int(display_w * x_scale)
-                display_h = int(display_h * y_scale)
-
-                # --- Constraint: Ensure Crop Rectangle is always visible ---
                 target_w_prop = config.get_property("width")
                 target_h_prop = config.get_property("height")
 
-                if target_h_prop > 0:
-                    target_aspect = target_w_prop / target_h_prop
-                    display_aspect = display_w / display_h if display_h > 0 else 0
-
-                    if display_aspect > 0:
-                        if target_aspect > display_aspect:
-                            predicted_crop_w = display_w
-                            predicted_crop_h = int(predicted_crop_w / target_aspect)
-                        else:
-                            predicted_crop_h = display_h
-                            predicted_crop_w = int(predicted_crop_h * target_aspect)
-
-                        scale_down_factor = 1.0
-                        if predicted_crop_w > preview_width:
-                            scale_down_factor = preview_width / predicted_crop_w
-                        if predicted_crop_h > preview_height:
-                            scale_down_factor = min(
-                                scale_down_factor, preview_height / predicted_crop_h
-                            )
-
-                        if scale_down_factor < 1.0:
-                            display_w = int(display_w * scale_down_factor)
-                            display_h = int(display_h * scale_down_factor)
-                # --- End Constraint ---
-
+                base_aspect = base_w / base_h
+                preview_aspect = preview_width / preview_height
+                target_aspect = target_w_prop / target_h_prop if target_h_prop > 0 else base_aspect
+                
+                # Determine crop rectangle size in the BASE (unzoomed) thumbnail
+                if target_aspect > base_aspect:
+                    crop_w_in_base = base_w
+                    crop_h_in_base = crop_w_in_base / target_aspect
+                else:
+                    crop_h_in_base = base_h
+                    crop_w_in_base = crop_h_in_base * target_aspect
+                
+                # Scale the crop rectangle to fill the preview
+                scale_for_crop_w = preview_width / crop_w_in_base
+                scale_for_crop_h = preview_height / crop_h_in_base
+                display_scale = min(scale_for_crop_w, scale_for_crop_h)
+                
+                # Calculate display size for the zoomed thumbnail
+                # This incorporates BOTH the user's zoom AND the scale to fit preview
+                display_w = int(thumb_w * display_scale)
+                display_h = int(thumb_h * display_scale)
                 display_w = max(1, display_w)
                 display_h = max(1, display_h)
-
-                display_thumbnail = final_thumbnail.scale_simple(
+                
+                # Scale the zoomed thumbnail for display
+                display_thumbnail = zoomed_thumbnail.scale_simple(
                     display_w, display_h, GdkPixbuf.InterpType.BILINEAR
                 )
 
                 if display_thumbnail:
-                    dest_x = (preview_width - display_w) // 2
-                    dest_y = (preview_height - display_h) // 2
+                    # Calculate crop rectangle dimensions in display space
+                    # Crop size stays constant visually - it fills the preview the same way regardless of zoom
+                    # The zoom factor makes the displayed image bigger, giving more area around the crop
+                    crop_w_display = int(crop_w_in_base * display_scale)
+                    crop_h_display = int(crop_h_in_base * display_scale)
+                    
+                    # Calculate available space around the crop in the zoomed display
+                    x_slop_display = display_w - crop_w_display
+                    y_slop_display = display_h - crop_h_display
+                    
+                    # Calculate where crop would be based on offset
+                    crop_x_in_display = (x_offset + 0.5) * x_slop_display
+                    crop_y_in_display = (y_offset + 0.5) * y_slop_display
+                    
+                    # Position thumbnail so crop is centered in preview
+                    # dest = where preview center is - where crop center would be
+                    dest_x = (preview_width - crop_w_display) // 2 - int(crop_x_in_display)
+                    dest_y = (preview_height - crop_h_display) // 2 - int(crop_y_in_display)
+                    
                     Gdk.cairo_set_source_pixbuf(cr, display_thumbnail, dest_x, dest_y)
                     cr.paint()
 
+                    # Draw overlays - pass the calculated crop dimensions
                     _draw_overlays(
                         cr,
                         display_w,
@@ -378,8 +370,8 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
                         dest_y,
                         x_offset,
                         y_offset,
-                        target_w_prop,
-                        target_h_prop,
+                        crop_w_display,
+                        crop_h_display,
                     )
 
             elif image is not None:
