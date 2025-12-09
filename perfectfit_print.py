@@ -19,6 +19,132 @@ plug_in_proc = "plug-in-perfectfit-print"
 plug_in_binary = "perfectfit-print"
 
 
+def _get_base_thumbnail(image):
+    """
+    Creates a high-resolution base thumbnail of the image, scaled to fit
+    within a 1024x1024 box.
+    """
+    if not image or image.get_width() == 0 or image.get_height() == 0:
+        return None
+
+    img_width = image.get_width()
+    img_height = image.get_height()
+    img_aspect = img_width / img_height
+
+    # Calculate dimensions to fit within a 1024x1024 box
+    if img_aspect > 1:  # Landscape
+        target_width = 1024
+        target_height = int(1024 / img_aspect)
+    else:  # Portrait or Square
+        target_height = 1024
+        target_width = int(1024 * img_aspect)
+    
+    target_width = max(1, target_width)
+    target_height = max(1, target_height)
+
+    return image.get_thumbnail(target_width, target_height, True)
+
+
+def _get_zoomed_view(base_thumbnail, x_scale, y_scale, x_offset, y_offset):
+    """
+    Takes a base thumbnail and slider values, and returns a new pixbuf
+    containing the panned-and-zoomed view.
+    """
+    if not base_thumbnail or (x_scale == 1.0 and y_scale == 1.0):
+        return base_thumbnail
+
+    thumb_w = base_thumbnail.get_width()
+    thumb_h = base_thumbnail.get_height()
+
+    zoomed_pixbuf = GdkPixbuf.Pixbuf.new(
+        GdkPixbuf.Colorspace.RGB,
+        base_thumbnail.get_has_alpha(),
+        base_thumbnail.get_bits_per_sample(),
+        thumb_w,
+        thumb_h,
+    )
+    if base_thumbnail.get_has_alpha():
+        zoomed_pixbuf.fill(0x00000000)
+
+    # Corrected LOGIC based on negative offsets
+    # 1. Calculate the centering offset to keep the zoom centered
+    center_offset_x = -((thumb_w * x_scale - thumb_w) / 2)
+    center_offset_y = -((thumb_h * y_scale - thumb_h) / 2)
+
+    # 2. Calculate the panning offset from the slider
+    pan_range_x = thumb_w * x_scale - thumb_w
+    pan_range_y = thumb_h * y_scale - thumb_h
+    pan_offset_x = x_offset * pan_range_x
+    pan_offset_y = y_offset * pan_range_y
+
+    # 3. Final offset is the sum
+    final_offset_x = center_offset_x + pan_offset_x
+    final_offset_y = center_offset_y + pan_offset_y
+
+    base_thumbnail.scale(
+        dest=zoomed_pixbuf,
+        dest_x=0,
+        dest_y=0,
+        dest_width=thumb_w,
+        dest_height=thumb_h,
+        offset_x=final_offset_x,
+        offset_y=final_offset_y,
+        scale_x=x_scale,
+        scale_y=y_scale,
+        interp_type=GdkPixbuf.InterpType.BILINEAR,
+    )
+
+    return zoomed_pixbuf
+
+
+def _draw_overlays(cr, config, thumb_w, thumb_h, dest_x, dest_y):
+    """
+    Draws the dimming overlay and the dashed crop rectangle.
+    """
+    target_w_prop = config.get_property("width")
+    target_h_prop = config.get_property("height")
+
+    if target_h_prop <= 0:
+        return
+
+    target_aspect = target_w_prop / target_h_prop
+    thumb_aspect = thumb_w / thumb_h
+
+    if target_aspect > thumb_aspect:
+        crop_w = thumb_w
+        crop_h = int(crop_w / target_aspect)
+    else:
+        crop_h = thumb_h
+        crop_w = int(crop_h * target_aspect)
+
+    x_slop = thumb_w - crop_w
+    y_slop = thumb_h - crop_h
+
+    crop_x = dest_x + x_slop / 2
+    crop_y = dest_y + y_slop / 2
+
+    cr.set_source_rgba(0, 0, 0, 0.5)
+    cr.rectangle(dest_x, dest_y, thumb_w, crop_y - dest_y)
+    cr.rectangle(
+        dest_x, crop_y + crop_h, thumb_w, (dest_y + thumb_h) - (crop_y + crop_h)
+    )
+    cr.rectangle(dest_x, crop_y, crop_x - dest_x, crop_h)
+    cr.rectangle(
+        crop_x + crop_w, crop_y, (dest_x + thumb_w) - (crop_x + crop_w), crop_h
+    )
+    cr.fill()
+
+    cr.set_line_width(1.0)
+    cr.rectangle(crop_x + 0.5, crop_y + 0.5, crop_w - 1, crop_h - 1)
+    cr.set_dash([4, 4])
+    cr.set_source_rgb(0, 0, 0)
+    cr.stroke_preserve()
+    cr.set_dash([4, 4], 4)
+    cr.set_source_rgb(1, 1, 1)
+    cr.stroke()
+    cr.set_dash([])
+
+
 def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
     if run_mode == Gimp.RunMode.INTERACTIVE:
         GimpUi.init(plug_in_binary)
@@ -114,41 +240,41 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
         preview_frame.set_hexpand(True)
         preview_frame.set_vexpand(True)
 
-        # X-Scale Scrollbar (Right, Vertical)
+        # X-Scale Scrollbar (Bottom, Horizontal)
         adj_x_scale = Gtk.Adjustment(
             value=config.get_property("x_scale"),
-            lower=100.0,
-            upper=200.0,
-            step_increment=0.5,
-            page_increment=5.0,
+            lower=1.0,
+            upper=2.0,
+            step_increment=0.01,
+            page_increment=0.1,
         )
         w_x_scale = Gtk.Scrollbar(
-            orientation=Gtk.Orientation.VERTICAL, adjustment=adj_x_scale
+            orientation=Gtk.Orientation.HORIZONTAL, adjustment=adj_x_scale
         )
         config.bind_property(
             "x_scale", adj_x_scale, "value", GObject.BindingFlags.DEFAULT
         )
-        preview_grid.attach(w_x_scale, 2, 1, 1, 1)  # Column 2, Row 1
-        w_x_scale.set_hexpand(False)
-        w_x_scale.set_vexpand(True)
+        preview_grid.attach(w_x_scale, 1, 2, 1, 1)  # Column 1, Row 2
+        w_x_scale.set_hexpand(True)
+        w_x_scale.set_vexpand(False)
 
-        # Y-Scale Scrollbar (Bottom, Horizontal)
+        # Y-Scale Scrollbar (Right, Vertical)
         adj_y_scale = Gtk.Adjustment(
             value=config.get_property("y_scale"),
-            lower=100.0,
-            upper=200.0,
-            step_increment=0.5,
-            page_increment=5.0,
+            lower=1.0,
+            upper=2.0,
+            step_increment=0.01,
+            page_increment=0.1,
         )
         w_y_scale = Gtk.Scrollbar(
-            orientation=Gtk.Orientation.HORIZONTAL, adjustment=adj_y_scale
+            orientation=Gtk.Orientation.VERTICAL, adjustment=adj_y_scale
         )
         config.bind_property(
             "y_scale", adj_y_scale, "value", GObject.BindingFlags.DEFAULT
         )
-        preview_grid.attach(w_y_scale, 1, 2, 1, 1)  # Column 1, Row 2
-        w_y_scale.set_hexpand(True)
-        w_y_scale.set_vexpand(False)
+        preview_grid.attach(w_y_scale, 2, 1, 1, 1)  # Column 2, Row 1
+        w_y_scale.set_hexpand(False)
+        w_y_scale.set_vexpand(True)
 
         # Lock Checkbox (Bottom Right)
         # Using GimpUi.ChainButton as requested by the user
@@ -174,129 +300,58 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
             preview_width = alloc.width
             preview_height = alloc.height
 
-            # Fill background
             cr.set_source_rgb(0.2, 0.2, 0.2)
             cr.rectangle(0, 0, preview_width, preview_height)
             cr.fill()
 
-            thumbnail = None
-            if image is not None:
-                img_width = image.get_width()
-                img_height = image.get_height()
-                if img_width == 0 or img_height == 0:
-                    return False  # Nothing to draw for an empty image
+            # 1. Get a high-resolution base thumbnail (max 1024px)
+            base_thumbnail = _get_base_thumbnail(image)
 
-                img_aspect = img_width / img_height
+            if base_thumbnail:
+                # 2. Get slider values
+                x_scale = adj_x_scale.get_value()
+                y_scale = adj_y_scale.get_value()
+                x_offset = adj_x_offset.get_value()
+                y_offset = adj_y_offset.get_value()
+
+                # 3. Apply zoom and pan to create the final high-res view
+                final_thumbnail = _get_zoomed_view(
+                    base_thumbnail, x_scale, y_scale, x_offset, y_offset
+                )
+
+                # 4. Scale the final view down to fit the actual drawing area
+                thumb_w = final_thumbnail.get_width()
+                thumb_h = final_thumbnail.get_height()
+                thumb_aspect = thumb_w / thumb_h
                 preview_aspect = preview_width / preview_height
 
-                # Calculate the final dimensions of the pixbuf to be displayed
-                if img_aspect > preview_aspect:
-                    target_width = preview_width
-                    target_height = int(target_width / img_aspect)
+                if thumb_aspect > preview_aspect:
+                    display_w = preview_width
+                    display_h = int(display_w / thumb_aspect)
                 else:
-                    target_height = preview_height
-                    target_width = int(target_height * img_aspect)
+                    display_h = preview_height
+                    display_w = int(display_h * thumb_aspect)
 
-                # Ensure target dimensions are at least 1px
-                target_width = max(1, target_width)
-                target_height = max(1, target_height)
+                # Ensure dimensions are at least 1
+                display_w = max(1, display_w)
+                display_h = max(1, display_h)
 
-                # --- Thumbnail Logic with Scaling Workaround ---
-                if target_width <= 1024 and target_height <= 1024:
-                    # If the target is small enough, get it directly
-                    thumbnail = image.get_thumbnail(target_width, target_height, True)
-                else:
-                    # Otherwise, get a max 1024px thumbnail first
-                    if img_aspect > 1:  # Landscape
-                        base_w = 1024
-                        base_h = int(1024 / img_aspect)
-                    else:  # Portrait or Square
-                        base_h = 1024
-                        base_w = int(1024 * img_aspect)
+                display_thumbnail = final_thumbnail.scale_simple(
+                    display_w, display_h, GdkPixbuf.InterpType.BILINEAR
+                )
 
-                    base_thumbnail = image.get_thumbnail(
-                        max(1, base_w), max(1, base_h), True
-                    )
+                # 5. Draw the display-sized thumbnail, centered
+                if display_thumbnail:
+                    dest_x = (preview_width - display_w) // 2
+                    dest_y = (preview_height - display_h) // 2
+                    Gdk.cairo_set_source_pixbuf(cr, display_thumbnail, dest_x, dest_y)
+                    cr.paint()
 
-                    # And scale it up to the final target size
-                    if base_thumbnail:
-                        thumbnail = base_thumbnail.scale_simple(
-                            target_width, target_height, GdkPixbuf.InterpType.BILINEAR
-                        )
-
-            if thumbnail:
-                # Center the final thumbnail in the preview area
-                dest_x = (preview_width - thumbnail.get_width()) // 2
-                dest_y = (preview_height - thumbnail.get_height()) // 2
-                Gdk.cairo_set_source_pixbuf(cr, thumbnail, dest_x, dest_y)
-                cr.paint()
-
-                # --- Draw Crop Rectangle Overlay ---
-                target_w_prop = config.get_property("width")
-                target_h_prop = config.get_property("height")
-
-                if target_h_prop > 0:
-                    target_aspect = target_w_prop / target_h_prop
-
-                    thumb_w = thumbnail.get_width()
-                    thumb_h = thumbnail.get_height()
-                    thumb_aspect = thumb_w / thumb_h
-
-                    # Calculate crop rect dimensions, fitting inside the thumbnail
-                    if target_aspect > thumb_aspect:
-                        crop_w = thumb_w
-                        crop_h = int(crop_w / target_aspect)
-                    else:
-                        crop_h = thumb_h
-                        crop_w = int(crop_h * target_aspect)
-
-                    # Position the crop rect based on offset sliders
-                    x_offset_val = adj_x_offset.get_value()
-                    y_offset_val = adj_y_offset.get_value()
-
-                    x_slop = thumb_w - crop_w
-                    y_slop = thumb_h - crop_h
-
-                    crop_x = dest_x + (x_offset_val + 0.5) * x_slop
-                    crop_y = dest_y + (y_offset_val + 0.5) * y_slop
-
-                    # --- Dimming Overlay ---
-                    cr.set_source_rgba(0, 0, 0, 0.5) # 50% translucent black
-
-                    # Area above the crop
-                    cr.rectangle(dest_x, dest_y, thumb_w, crop_y - dest_y)
-
-                    # Area below the crop
-                    cr.rectangle(dest_x, crop_y + crop_h, thumb_w, (dest_y + thumb_h) - (crop_y + crop_h))
-
-                    # Area left of the crop (within the crop's vertical bounds)
-                    cr.rectangle(dest_x, crop_y, crop_x - dest_x, crop_h)
-
-                    # Area right of the crop (within the crop's vertical bounds)
-                    cr.rectangle(crop_x + crop_w, crop_y, (dest_x + thumb_w) - (crop_x + crop_w), crop_h)
-                    
-                    cr.fill()
-                    # --- END Dimming Overlay ---
-
-                    # Draw marching ants rectangle
-                    cr.set_line_width(1.0)
-                    # Inset by 0.5 for a crisp 1px line
-                    cr.rectangle(crop_x + 0.5, crop_y + 0.5, crop_w - 1, crop_h - 1)
-
-                    # Black dashes
-                    cr.set_source_rgb(0, 0, 0)
-                    cr.stroke_preserve()
-
-                    # White dashes (offset)
-                    cr.set_dash([4, 4], 4)
-                    cr.set_source_rgb(1, 1, 1)
-                    cr.stroke()
-
-                    # Reset dash for other drawing
-                    cr.set_dash([])
+                    # 6. Draw overlays based on the display-sized thumbnail
+                    _draw_overlays(cr, config, display_w, display_h, dest_x, dest_y)
 
             elif image is not None:
-                # Fallback if thumbnail creation fails for any reason
+                # Fallback if thumbnail creation fails
                 cr.set_source_rgb(0.5, 0.5, 0.5)
                 cr.move_to(0, 0)
                 cr.line_to(preview_width, preview_height)
@@ -348,9 +403,11 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
 
             x_offset = adj_x_offset.get_value()
             y_offset = adj_y_offset.get_value()
+            x_scale = adj_x_scale.get_value()
+            y_scale = adj_y_scale.get_value()
 
             info_label.set_text(
-                f"X-DPI: {dpi_x:.0f}, Y-DPI: {dpi_y:.0f} | Target: {target_width_in:.2f}x{target_height_in:.2f}in | Offset: {x_offset:.2f}, {y_offset:.2f}"
+                f"X-DPI: {dpi_x:.0f}, Y-DPI: {dpi_y:.0f} | Target: {target_width_in:.2f}x{target_height_in:.2f}in | Scale: {x_scale:.2f}, {y_scale:.2f} | Offset: {x_offset:.2f}, {y_offset:.2f}"
             )
 
             # Trigger a redraw of the preview area
@@ -361,8 +418,7 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
             "width",
             "height",
             "unit",
-            "x_scale",
-            "y_scale",
+            # x_scale and y_scale are connected directly below
         ]:
             config.connect(f"notify::{prop}", update_calculations)
 
@@ -395,6 +451,11 @@ def perfectfit_print_run(procedure, run_mode, image, drawables, config, data):
         # The Gimp.Config "notify" signal seems unreliable for standard Gtk widgets.
         adj_x_offset.connect("value-changed", update_calculations)
         adj_y_offset.connect("value-changed", update_calculations)
+
+        # Explicitly connect the scale sliders' adjustments to the update function
+        # to ensure immediate redraws.
+        adj_x_scale.connect("value-changed", update_calculations)
+        adj_y_scale.connect("value-changed", update_calculations)
 
         if not dialog.run():
             dialog.destroy()
@@ -494,18 +555,18 @@ class PerfectFitPrint(Gimp.PlugIn):
                 "x_scale",
                 "X-Scale",
                 "X-Scale",
-                100.0,
-                200.0,
-                100.0,
+                1.0,
+                2.0,
+                1.0,
                 GObject.ParamFlags.READWRITE,
             )
             procedure.add_double_argument(
                 "y_scale",
                 "Y-Scale",
                 "Y-Scale",
-                100.0,
-                200.0,
-                100.0,
+                1.0,
+                2.0,
+                1.0,
                 GObject.ParamFlags.READWRITE,
             )
             procedure.add_boolean_argument(
